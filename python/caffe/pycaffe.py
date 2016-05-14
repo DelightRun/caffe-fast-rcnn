@@ -3,7 +3,6 @@ Wrap the internal caffe C++ module (_caffe.so) with a clean, Pythonic
 interface.
 """
 
-import six
 from collections import OrderedDict
 try:
     from itertools import izip_longest
@@ -14,6 +13,8 @@ import numpy as np
 from ._caffe import Net, SGDSolver, NesterovSolver, AdaGradSolver, \
         RMSPropSolver, AdaDeltaSolver, AdamSolver
 import caffe.io
+
+import six
 
 # We directly update methods from Net here (rather than using composition or
 # inheritance) so that nets created by caffe (e.g., by SGDSolver) will
@@ -26,7 +27,9 @@ def _Net_blobs(self):
     An OrderedDict (bottom to top, i.e., input to output) of network
     blobs indexed by name
     """
-    return OrderedDict(zip(self._blob_names, self._blobs))
+    if not hasattr(self, '_blobs_dict'):
+        self._blobs_dict = OrderedDict(zip(self._blob_names, self._blobs))
+    return self._blobs_dict
 
 
 @property
@@ -35,7 +38,10 @@ def _Net_blob_loss_weights(self):
     An OrderedDict (bottom to top, i.e., input to output) of network
     blob loss weights indexed by name
     """
-    return OrderedDict(zip(self._blob_names, self._blob_loss_weights))
+    if not hasattr(self, '_blobs_loss_weights_dict'):
+        self._blob_loss_weights_dict = OrderedDict(zip(self._blob_names,
+                                                       self._blob_loss_weights))
+    return self._blob_loss_weights_dict
 
 
 @property
@@ -45,19 +51,28 @@ def _Net_params(self):
     parameters indexed by name; each is a list of multiple blobs (e.g.,
     weights and biases)
     """
-    return OrderedDict([(name, lr.blobs)
-                        for name, lr in zip(self._layer_names, self.layers)
-                        if len(lr.blobs) > 0])
+    if not hasattr(self, '_params_dict'):
+        self._params_dict = OrderedDict([(name, lr.blobs)
+                                        for name, lr in zip(
+                                            self._layer_names, self.layers)
+                                        if len(lr.blobs) > 0])
+    return self._params_dict
 
 
 @property
 def _Net_inputs(self):
-    return [list(self.blobs.keys())[i] for i in self._inputs]
+    if not hasattr(self, '_input_list'):
+        keys = list(self.blobs.keys())
+        self._input_list = [keys[i] for i in self._inputs]
+    return self._input_list
 
 
 @property
 def _Net_outputs(self):
-    return [list(self.blobs.keys())[i] for i in self._outputs]
+    if not hasattr(self, '_output_list'):
+        keys = list(self.blobs.keys())
+        self._output_list = [keys[i] for i in self._outputs]
+    return self._output_list
 
 
 def _Net_forward(self, blobs=None, start=None, end=None, **kwargs):
@@ -99,7 +114,7 @@ def _Net_forward(self, blobs=None, start=None, end=None, **kwargs):
         # Set input according to defined shapes and make arrays single and
         # C-contiguous as Caffe expects.
         for in_, blob in six.iteritems(kwargs):
-            if blob.shape[0] != self.blobs[in_].num:
+            if blob.shape[0] != self.blobs[in_].shape[0]:
                 raise Exception('Input is not batch sized')
             self.blobs[in_].data[...] = blob
 
@@ -147,7 +162,7 @@ def _Net_backward(self, diffs=None, start=None, end=None, **kwargs):
         # Set top diffs according to defined shapes and make arrays single and
         # C-contiguous as Caffe expects.
         for top, diff in six.iteritems(kwargs):
-            if diff.shape[0] != self.blobs[top].num:
+            if diff.shape[0] != self.blobs[top].shape[0]:
                 raise Exception('Diff is not batch sized')
             self.blobs[top].diff[...] = diff
 
@@ -181,7 +196,7 @@ def _Net_forward_all(self, blobs=None, **kwargs):
     for out in all_outs:
         all_outs[out] = np.asarray(all_outs[out])
     # Discard padding.
-    pad = len(all_outs.itervalues().next()) - len(kwargs.itervalues().next())
+    pad = len(six.next(six.itervalues(all_outs))) - len(six.next(six.itervalues(kwargs)))
     if pad:
         for out in all_outs:
             all_outs[out] = all_outs[out][:-pad]
@@ -225,7 +240,7 @@ def _Net_forward_backward_all(self, blobs=None, diffs=None, **kwargs):
         all_outs[out] = np.asarray(all_outs[out])
         all_diffs[diff] = np.asarray(all_diffs[diff])
     # Discard padding at the end and package in ndarray.
-    pad = len(all_outs.itervalues().next()) - len(kwargs.itervalues().next())
+    pad = len(six.next(six.itervalues(all_outs))) - len(six.next(six.itervalues(kwargs)))
     if pad:
         for out, diff in zip(all_outs, all_diffs):
             all_outs[out] = all_outs[out][:-pad]
@@ -257,10 +272,10 @@ def _Net_batch(self, blobs):
     ------
     batch: {blob name: list of blobs} dict for a single batch.
     """
-    num = len(blobs.itervalues().next())
-    batch_size = self.blobs.itervalues().next().num
+    num = len(six.next(six.itervalues(blobs)))
+    batch_size = six.next(six.itervalues(self.blobs)).shape[0]
     remainder = num % batch_size
-    num_batches = num / batch_size
+    num_batches = num // batch_size
 
     # Yield full batches.
     for b in range(num_batches):
